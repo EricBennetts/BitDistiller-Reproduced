@@ -9,9 +9,12 @@
 4. [Inferencce](#4-inference)
 
 ## 1. Setup
+Make sure you have:
 * python >=3.9, pytorch >= 1.13
-* pip install -r requirement.txt 
-  
+and run the following command:
+```bash
+pip install -r requirement.txt 
+```
   (You may need to change the version of transformers according to the model config)
 
 This project utilizes llama-3.2-1B, you may download the model from [here](https://huggingface.co/NousResearch/Llama-3.2-1B/tree/main) or [here](https://huggingface.co/meta-llama/Llama-3.2-1B/tree/main).

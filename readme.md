@@ -16,6 +16,13 @@
 
 This project utilizes llama-3.2-1B, you may download the model from [here](https://huggingface.co/NousResearch/Llama-3.2-1B/tree/main) or [here](https://huggingface.co/meta-llama/Llama-3.2-1B/tree/main).
 
+I used the pile dataset for calibration during asymmetric clipping. I will provide the way to prepare this dataset. You can experiment with other two alternatives (code or gsm8k) as well. 
+
+Go to the HuggingFace website [here](https://huggingface.co/datasets/mit-han-lab/pile-val-backup/tree/main) to download the zst file.
+
+Move the zst file to the ./quantization directory.
+
+
 ## 2. Running
 
 Our results is running by following 3 steps:

@@ -2,21 +2,6 @@
 
 **Implementing efficient sub-4-bit weight quantization (3 / 2 bits) in LLMs through advanced QAT-based Self-Distillation techniques.**
 
-![overview](./imgs/overview.jpg)
-
-## Comparing general language tasks with other methods
-![overview](./imgs/result7b.jpg)
-<!-- ![overview](./imgs/result2.png)-->
-## Comparing reasoning benchmarks with other methods
-![overview](./imgs/result.png)
-
-## Example on 2-bit inference of a Domain-specific LLM (MetaMath)
-![gif](./imgs/Bitdistiller.gif)
-
-## News
-* [2024/05] 🔥 BitDistiller has been accepted to ACL main 2024! 
-
-
 ## Contents
 1. [Setup](#1-setup)
 2. [Running](#2-running)
@@ -24,7 +9,7 @@
 4. [Inferencce](#4-inference)
 
 ## 1. Setup
-* python 3.9, pytorch >= 1.13
+* python >=3.9, pytorch >= 1.13
 * pip install -r requirement.txt 
   
   (You may need to change the version of transformers according to the model config)

@@ -14,6 +14,8 @@
   
   (You may need to change the version of transformers according to the model config)
 
+This project utilizes llama-3.2-1B, you may download the model from [here](https://huggingface.co/NousResearch/Llama-3.2-1B/tree/main) or [here](https://huggingface.co/meta-llama/Llama-3.2-1B/tree/main).
+
 ## 2. Running
 
 Our results is running by following 3 steps:

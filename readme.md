@@ -4,9 +4,10 @@
 
 ## Contents
 1. [Setup](#1-setup)
-2. [Running](#2-running)
-3. [Evaluation](#3-evaluation)
-4. [Inferencce](#4-inference)
+2. [Data Preparation](#2-data-preparation)
+3. [Running](#2-running)
+4. [Evaluation](#3-evaluation)
+5. [Inferencce](#4-inference)
 
 ## 1. Setup
 Make sure you have:
@@ -27,6 +28,10 @@ Go to the HuggingFace website [here](https://huggingface.co/datasets/mit-han-lab
 Move the zst file to the ./quantization directory.
 
 >Note: It is not advisable to use older GPUs like TITAN X, because there can be compatibility problems. I used Nvidia 2080 Ti and things went on swimmingly, unlike TITAN X.
+
+## 2. Data Preparation
+
+In some situations, your device may fail to fetch datasets from HuggingFace using the python method *load_dataset*
 
 ## 2. Running
 

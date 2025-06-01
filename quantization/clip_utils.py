@@ -112,7 +112,7 @@ def get_calib_dataset_code(tokenizer=None, n_samples=512, block_size=512):
 
 def get_calib_dataset_gsm8k(tokenizer=None, n_samples=512, block_size=512):
     # download from here: https://github.com/OFA-Sys/gsm8k-ScRel/blob/main/data/train_use.jsonl
-    data_path = "/root/model/gsm8k-ScRel/data/train_use.jsonl"
+    data_path = "train_use.jsonl"
 
     with open(data_path, 'r') as f:
         dataset_for_eval = f.readlines()

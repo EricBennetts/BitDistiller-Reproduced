@@ -29,7 +29,7 @@ def main():
     # Get the directory of the current script (SE_PROJ)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    default_model_path_val = os.path.join(script_dir, "MetaMath")
+    default_model_path_val = os.path.join(script_dir, "llama")
     default_dump_clip_path_val = os.path.join(script_dir, "clipped_results.pt") 
 
     parser = argparse.ArgumentParser(

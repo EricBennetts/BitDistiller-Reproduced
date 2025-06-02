@@ -4,10 +4,9 @@
 
 ## Contents
 1. [Setup](#1-setup)
-2. [Data Preparation](#2-data-preparation)
-3. [Running](#2-running)
-4. [Evaluation](#3-evaluation)
-5. [Inferencce](#4-inference)
+2. [Running](#2-running)
+3. [Evaluation](#3-evaluation)
+4. [Inferencce](#4-inference)
 
 ## 1. Setup
 Make sure you have:
@@ -15,214 +14,77 @@ Make sure you have:
   
 and run the following command:
 ```bash
-pip install -r requirement.txt 
+pip install -r requirements.txt 
 ```
->Note: You may need to change the version of transformers according to the model config
+>Note: You may need to change the version of transformers according to the model config.
 
 When I reproduced this project, I utilized llama-3.2-1B, you may download the model from [here](https://huggingface.co/NousResearch/Llama-3.2-1B/tree/main) or [here](https://huggingface.co/meta-llama/Llama-3.2-1B/tree/main).
 
-I used the pile dataset for calibration during asymmetric clipping. I will provide the way to prepare this dataset. You can experiment with other two alternatives (code or gsm8k) as well. 
+Put the model (the whole HF directory containing files like config.json and model.safetensors) at the same directory of this readme.md, rename it to `llama`. 
 
-Go to the HuggingFace website [here](https://huggingface.co/datasets/mit-han-lab/pile-val-backup/tree/main) to download the zst file.
+I used the *pile* dataset for calibration during asymmetric clipping.
 
-Move the zst file to the ./quantization directory.
+>Note: If the program constantly fails to fetch the dataset from HuggingFace, you may need to use a mirror source of HuggingFace, e.g., https://hf-mirror.com
 
->Note: It is not advisable to use older GPUs like TITAN X, because there can be compatibility problems. I used Nvidia 2080 Ti and things went on swimmingly, unlike TITAN X.
+>Note: It is not advisable to use old GPUs like TITAN X, because there can be compatibility problems. I used one A800 80G GPU for the most part of this project. It is absolutely advisable to use more GPUs to run this project (80GB of VRAM is barely enough), even though it is just a 1B model. 
 
-## 2. Data Preparation
-
-In some situations, your device may fail to fetch datasets from HuggingFace using the python method *load_dataset*
+It is highly recommended to create a conda virtual environment and then install the `vllm` module inside it for future use.
 
 ## 2. Running
 
-Our results is running by following 3 steps:
+The whole process is done in three steps.
 
 ### 2.1. Asymmetric Quantization
-* Determine the type of quantization: use `nf3` for 3 bits and `int` for 2 bits. Set `w_bit` and `quant_type` accordingly.
 
-* Perform clipping before training and save the clipping values using dump_clip (see `quantization/autoclip.py`).
+Run `run_autoclip_wrapper.py`.
 
->This step can match or surpass the low-bit PTQ quantization results of GPTQ and AWQ.
+You will be prompted to input necessary arguments to run the clipping. If you would like to reproduce this project, simply press enter to use the defaults.
 
-### 2.2. Generating Teacher Data
-* For QAT, create data using the Teacher Model (BF16). The data varies depending on the model (see `data/generation`).
+You will have a file named `clipped_results.pt` upon completion.
 
+### 2.2. Generate Teacher Data
+
+Go to the virtual environment that I recommended you to create.
+
+Run `run_data_gen_with_vllm.py`.
+
+You will be prompted to input necessary arguments to run the teacher data generation process. You will need two rounds of execution, in the first round, simply use all the defaults; in the second run, choose *alpaca* as the dataset name and set maximum number of samples to *5000*.
+
+After that, run:
+
+```bash
+cd data/generation
+
+python mix_data.py
+```
 
 ### 2.3. KD-base QAT
-* Detailed procedure available in `train/`
 
+To run QAT, you can execute:
 
-### Example Srcipts
-
-<details>
-  <summary>LLaMA-2</summary>
-  
-1. Get the Clipping result
-    ```bash
-    cd BitDistiller/quantization
-
-    CUDA_VISIBLE_DEVICES=0 python autoclip.py --model_path <model_path> --calib_dataset pile --quant_type int --w_bit 2 --q_group_size 128 --run_clip --dump_clip ./clip_cache/hf-llama2-7b/int2-g128.pt
-    ```
-2. Get the Teacher Generation Data (Using vllm would be much faster)
-    ```bash
-    # vllm
-    python generate_vllm.py --base_model <model_path> --dataset_name wikitext --out_path ./datasets/hf-llama-2-7b/ --max_sample 3000
-
-    python generate_vllm.py --base_model <model_path> --dataset_name alpaca --out_path ./datasets/hf-llama-2-7b/ --max_sample 5000
-
-    # change to path in .py
-    python mix_data.py
-    ```
-
-    ```bash
-    # torchrun
-    cd BitDistiller/data/generation
-
-    bash generate.sh <model_path> wikitext ../datasets/hf-llama-2-7b/ 16 3000
-
-    bash generate.sh <model_path> alpaca ../datasets/hf-llama-2-7b/ 16 5000
-
-    # change to path in .py
-    python mix_data.py
-    ```
-3. Run KD-base QAT
-    ```bash
-    # Specify the pre-trained model path
-    # Specify the num_gpus and batch_size according to your GPU devices
-    # Specify the clipping cache path to the --clip
-
-    cd train
+```bash
+cd train
     
-    bash train.sh ../data/datasets/hf-llama-2-7b/mix_wiki_alpaca_8000.json ./ckpts/hf-llama-2-7b/int2-g128/ ./logs/hf-llama-2-7b/int2-g128/ 4
-    ```
-</details>
-
-<details>
-  <summary>WizardCoder</summary>
-  
-1. Get the Clipping result
-    ```bash
-    cd BitDistiller/quantization
-
-    CUDA_VISIBLE_DEVICES=0 python autoclip.py --model_path <model_path> --calib_dataset code --quant_type int --w_bit 2 --q_group_size 128 --run_clip --dump_clip ./clip_cache/WizardCoder-7B/int2-g128.pt
-    ```
-2. Get the Teacher Generation Data
-    ```bash
-    # vllm
-    python generate_vllm.py --base_model <model_path> --dataset_name code --out_path ./datasets/WizardCoder-7b/ --max_sample 3000
-    ```
-
-    ```bash
-    cd BitDistiller/data/generation
-
-    bash generate.sh /root/WizardCoder-Python-7B/ code ../datasets/WizardCoder-7b/ 16 3000
-    ```
-3. Run KD-base QAT
-    ```bash
-    # Specify the pre-trained model path
-    # Specify the num_gpus and batch_size according to your GPU devices
-    # Specify the clipping cache path to the --clip
-
-    cd train
-    
-    bash train.sh ../data/datasets/WizardCoder-7b/code_T0.7_N1024_S42_3000.json ./ckpts/WizardCoder-7b/int2-g128/ ./logs/WizardCoder-7b/int2-g128/ 2
-    ```
-</details>
-
-<details>
-  <summary>MetaMath</summary>
-
-1. Get the Clipping result
-    ```bash
-    cd BitDistiller/quantization
-
-    CUDA_VISIBLE_DEVICES=0 python autoclip.py --model_path <model_path> --calib_dataset gsm8k --quant_type int --w_bit 2 --q_group_size 128 --run_clip --dump_clip ./clip_cache/MetaMath-7B/int2-g128.pt
-    ```
-2. Get the Teacher Generation Data
-    ```bash
-    # vllm
-    python generate_vllm.py --base_model <model_path> --dataset_name math --out_path ./datasets/MetaMath-7B/ --max_sample 3000
-    ```
-
-    ```bash
-    cd BitDistiller/data/generation
-
-    bash generate.sh /root/MetaMath-7B-V1.0/ math ../datasets/MetaMath-7B/ 16 3000
-    ```
-3. Run KD-base QAT
-    ```bash
-    # Specify the pre-trained model path
-    # Specify the num_gpus and batch_size according to your GPU devices
-    # Specify the clipping cache path to the --clip
-
-    cd train
-    
-    bash train.sh ../data/datasets/MetaMath-7B/math_T0.7_N1024_S42_3000.json ./ckpts/MetaMath-7b/int2-g128/ ./logs/MetaMath-7b/int2-g128/ 2
-    ```
-</details>
+bash train.sh ../data/generation/datasets/hf-llama-1B/mix_wiki_alpaca_8000.json ./ckpts/hf-llama-1B/int2-g128/ ./logs/hf-llama-1B/int2-g128/ 4
+```
 
 ## 3. Evaluation
-### Example Srcipts
-<details>
-  <summary>LLaMA-2</summary>
+This project evaluates two metrics: PPL and the token generation speed in tokens/sec.
 
-
-
-* Test PPL on WikiText-2
-  ```bash
-  cd test/general
-
-  python wiki_ppl.py --model ../../train/ckpts/hf-llama-2-7b/int2-g128/checkpoint-200/ --quant_type int --bits 2 --group_size 128
-  ```
-* Test MMLU
-  ```bash
-  CUDA_VISIBLE_DEVICES=0 python llm_eval.py --model ../../train/ckpts/hf-llama-2-7b/int2-g128/checkpoint-200/ --eval_tasks hendrycksTest-* --test_set --bits 2 --group_size 128 --quant_type int --num_fewshot 5
-  ```
-* Test Common-sense QA Tasks
-  ```bash
-  CUDA_VISIBLE_DEVICES=0 python llm_eval.py --model ../../train/ckpts/hf-llama-2-7b/int2-g128/checkpoint-200/ --eval_tasks arc_challenge,winogrande,hellaswag,piqa --test_set --bits 2 --group_size 128 --quant_type int --num_fewshot 0 
-  ```
-
-</details>
-
-<details>
-  <summary>WizardCoder</summary>
-
-* Install the environment according to the instructions of [HumanEval](https://github.com/openai/human-eval), 
-
-* Example script:
-    ```bash
-    cd test/humaneval
-    bash gen_preds.sh [checkpoint_path] ./preds/7b/int2-g128/
-    ```
-</details>
-
-<details>
-  <summary>MetaMath</summary>
-  
-* Example script:
-
-    ```bash
-    cd test/gsm8k
-    bash test.sh ../../train/ckpts/MetaMath-7b/int2-g128/ ./preds/7b/int2-g128/
-    ```
-</details>
-
-
-## 4. Inference
-Please see `inference/`
-
-
-
-## Reference
-If you find BitDistiller useful or relevant to your research, please kindly cite our paper:
+* To evaluate PPL, you can run:
+```bash
+python get_PPL.py
 ```
-@misc{du2024bitdistiller,
-      title={BitDistiller: Unleashing the Potential of Sub-4-Bit LLMs via Self-Distillation}, 
-      author={Dayou Du and Yijia Zhang and Shijie Cao and Jiaqi Guo and Ting Cao and Xiaowen Chu and Ningyi Xu},
-      year={2024},
-      eprint={2402.10631},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL}
-}
+You may need to change the model path inside the script.
+
+* To evaluate tokens/sec, you can run
+
+```bash
+python token_speed_test.py  # For the full-precision model
+python token_speed_test_for_quant.py # For quantizing and testing the model
 ```
+
+The results are based on the 12th checkpoint during QAT. Because one A800 is not really capable of reproducing the original project.
+
+![Alt text](imgs/PPL.png)
+![Alt text](imgs/tks.png)

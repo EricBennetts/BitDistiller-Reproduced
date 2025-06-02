@@ -114,177 +114,97 @@ def run_clip(
     datasets="pile"
 ):
     print(f"Using {datasets} dataset to do calibation")
-    samples_list = get_calib_dataset(
+    samples = get_calib_dataset(
               datasets=datasets, tokenizer=enc, n_samples=n_samples, block_size=seqlen)
-    if not samples_list:
-        raise ValueError(f"No calibration data samples loaded from {datasets}.")
-    
-    samples_for_catcher = samples_list[0] # Use the first block for Catcher
+    samples = torch.cat(samples, dim=0)
 
-    # This will hold the input to the *current* layer being processed
-    # It starts as the output of the embedding layer (hidden_states)
-    # and is updated to be the output of layer i-1 to become input for layer i
-    current_layer_input_on_cpu = None # Will be populated after Catcher
-
-    # This will hold kwargs like attention_mask, position_ids for layers
-    # These are established by the first full model pass (via Catcher)
-    # and should generally be the same for all layers unless past_key_values are used (not here)
-    layer_kwargs_from_catcher = {} 
+    inps = []
+    layer_kwargs = {}
     
     layers = get_blocks(model)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Target device for model operations: {device}")
 
-    model.to(device)
+    layers[0] = layers[0].cuda()
+    move_embed(model, "cuda")
 
+    # get input and kwargs to layer 0
+    # with_kwargs is only supported in PyTorch 2.0
+    # use this Catcher hack for now
     class Catcher(nn.Module):
         def __init__(self, module):
             super().__init__()
             self.module = module
 
-        def forward(self, inp_hidden_states, **kwargs_for_layer): # inp_hidden_states is the input to the first layer
-            nonlocal current_layer_input_on_cpu # To assign to the outer scope variable
-            nonlocal layer_kwargs_from_catcher
+        def forward(self, inp, **kwargs):
+            inps.append(inp)
+            layer_kwargs.update(kwargs)
+            raise ValueError  # early exit to break later inference
 
-            current_layer_input_on_cpu = inp_hidden_states.detach().cpu()
-            
-            # Store kwargs, making sure any tensors are moved to CPU for storage
-            # to free up GPU memory. They'll be moved back to 'device' when used.
-            for k, v_kwarg in kwargs_for_layer.items():
-                if isinstance(v_kwarg, torch.Tensor):
-                    layer_kwargs_from_catcher[k] = v_kwarg.detach().cpu()
-                else:
-                    layer_kwargs_from_catcher[k] = v_kwarg
-            raise ValueError # early exit
-    
-    original_layer_0 = layers[0]
-    layers[0] = Catcher(original_layer_0)
-    
+    # patch layer 0 to catch input and kwargs
+    layers[0] = Catcher(layers[0])
     try:
-        # The model's forward pass will generate initial position_ids and attention_mask
-        # These will be passed as **kwargs_for_layer to Catcher's forward
-        model(input_ids=samples_for_catcher.to(device)) # Pass input_ids to trigger full model logic
-    except ValueError:
+        model(samples.to(next(model.parameters()).device))
+    except ValueError:  # work with early exit
         pass
-    
-    del samples_for_catcher
-    layers[0] = original_layer_0
-    
-    if current_layer_input_on_cpu is None:
-        raise RuntimeError("Catcher did not capture any input. Model forward pass might have failed silently.")
+    del samples
+    layers[0] = layers[0].module  # restore
+    inps = inps[0]
 
-    model.cpu()
-    torch.cuda.empty_cache()
+    layers[0] = layers[0].cpu()
+    move_embed(model, "cpu")
+    
     gc.collect()
+    torch.cuda.empty_cache()
 
-    clip_results = {"clip": []}
-    
-    # 'current_layer_input_on_cpu' now holds the hidden_states output from embeddings (input to layer 0)
-    # 'layer_kwargs_from_catcher' holds attention_mask, position_ids etc. from the initial model pass, on CPU.
+    clip_results = {
+        "clip": [],
+    }
 
+    # solve layer by layer
     for i in tqdm(range(len(layers)), desc="Running Asymmetric Clipping..."):
         layer = layers[i]
-        layer.to(device)
-        
+        layer = layer.cuda()
         named_linears = get_named_linears(layer)
-        input_feat_for_clip = defaultdict(list) # Renamed to avoid confusion
+
+        # firstly, get input features of all linear layers
+        def cache_input_hook(m, x, y, name, feat_dict):
+            x = x[0]
+            x = x.detach().cpu()
+            feat_dict[name].append(x)
+
+        input_feat = defaultdict(list)
         handles = []
-
-        def cache_input_hook_for_clip(m, x, y, name, feat_dict):
-            x_tensor = x[0]
-            feat_dict[name].append(x_tensor.detach().cpu()) # Cache on CPU
-
-        for name_linear in named_linears:
-            handles.append(named_linears[name_linear].register_forward_hook(
-                functools.partial(cache_input_hook_for_clip, name=name_linear,
-                                  feat_dict=input_feat_for_clip)))
-        
-        # Prepare inputs and kwargs for the current layer, moving them to 'device'
-        current_layer_input_on_device = current_layer_input_on_cpu.to(device)
-        
-        layer_kwargs_for_current_iter = {}
-        if layer_kwargs_from_catcher: # If catcher actually caught kwargs
-            for k_kwarg, v_kwarg in layer_kwargs_from_catcher.items():
-                if isinstance(v_kwarg, torch.Tensor):
-                    layer_kwargs_for_current_iter[k_kwarg] = v_kwarg.to(device)
-                else:
-                    layer_kwargs_for_current_iter[k_kwarg] = v_kwarg
-        
-        # Ensure 'position_ids' is present if needed by the layer,
-        # and it's not explicitly disabled by use_cache=False and no past_key_values
-        # For Llama, position_ids are crucial.
-        # The LlamaDecoderLayer forward signature is:
-        # hidden_states, attention_mask=None, position_ids=None, past_key_value=None, ...
-        # The `layer_kwargs_from_catcher` should contain `attention_mask` and `position_ids`
-        # as prepared by `LlamaModel` for the first layer.
-
-        # The `LlamaDecoderLayer.forward` expects `attention_mask` (which can be 4D)
-        # and `position_ids` (which is 2D, e.g., [batch_size, seq_len])
-        # The `attention_mask` from `LlamaModel.forward` should be correctly shaped (4D).
-        
-        # Critical: The `attention_mask` in `layer_kwargs_for_current_iter` should be the one
-        # generated by the main LlamaModel forward pass, which is typically 4D.
-        # The `position_ids` should also be from there.
-        # The error "IndexError: too many indices for tensor of dimension 2" for causal_mask
-        # implies that the `attention_mask` passed to the layer was 2D and the LlamaAttention
-        # class's internal logic tried to slice it as if it were 4D after some processing.
-
-        # One key thing: if use_cache=True (default for Llama), layers expect past_key_value.
-        # For calibration, we typically don't use past_key_values.
-        # The layer forward call might need output_attentions=False, use_cache=False
-        # to simplify its signature if these are not in layer_kwargs_from_catcher.
-        # However, the error is *before* past_key_values would be a problem.
-
-        # Let's assume layer_kwargs_for_current_iter has the correct attention_mask and position_ids
-        # from the Catcher. The shapes should be:
-        # current_layer_input_on_device: [bsz, seq_len, hidden_size]
-        # layer_kwargs_for_current_iter['attention_mask']: [bsz, 1, seq_len, seq_len] (for causal)
-        # layer_kwargs_for_current_iter['position_ids']: [bsz, seq_len]
-        
-        # Ensure all expected kwargs are present
-        expected_decoder_layer_kwargs = {"attention_mask", "position_ids"}
-        final_kwargs_for_layer = {}
-        for k_expect in expected_decoder_layer_kwargs:
-            if k_expect in layer_kwargs_for_current_iter:
-                final_kwargs_for_layer[k_expect] = layer_kwargs_for_current_iter[k_expect]
-            # else:
-                # print(f"Warning: Expected kwarg '{k_expect}' not found in layer_kwargs_from_catcher for layer {i}")
-        
-        # Call the layer
-        # The LlamaDecoderLayer returns a tuple. The first element is hidden_states.
-        # If use_cache=True (default), it also returns present_key_value.
-        # If output_attentions=True, it also returns self_attn_weights.
-        # We only need the hidden_states.
-        layer_outputs = layer(current_layer_input_on_device, **final_kwargs_for_layer)
-        output_hidden_states_on_device = layer_outputs[0]
-        
+        for name in named_linears:
+            handles.append(named_linears[name].register_forward_hook(
+                functools.partial(cache_input_hook, name=name,
+                                  feat_dict=input_feat)))
+        inps = inps.to(next(layer.parameters()).device)  # in case multi-gpu
+        # get output as next layer's input
+        inps = layer(inps, **layer_kwargs)[0]
         for h in handles:
             h.remove()
 
-        # input_feat_for_clip values are on CPU
-        input_feat_for_clip = {k_feat: torch.cat(v_feat, dim=0) for k_feat, v_feat in input_feat_for_clip.items()}
+        # now solve for clipping
+        input_feat = {k: torch.cat(v, dim=0) for k, v in input_feat.items()}
 
+        # Clear GPU memory
         torch.cuda.empty_cache()
 
         clip_list = auto_clip_block(layer,
                                     w_bit=w_bit, q_config=q_config,
-                                    input_feat=input_feat_for_clip)
+                                    input_feat=input_feat)
         
         apply_clip(layer, clip_list)
-        
+        # append prefix to make names global
         clip_results["clip"] += append_str_prefix(clip_list, get_op_name(model, layer) + ".")
 
-        layer.cpu()
-        current_layer_input_on_cpu = output_hidden_states_on_device.cpu() # Update for next iteration
-        
-        del input_feat_for_clip
-        del current_layer_input_on_device
-        del output_hidden_states_on_device
-        del layer_outputs
+        layer = layer.cpu()
+        # Haotian: check activation replacement
+        del input_feat
         gc.collect()
         torch.cuda.empty_cache()
         
     return clip_results
+
 
 def main(args, q_config):
     if args.dump_clip and os.path.exists(args.dump_clip):

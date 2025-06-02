@@ -6,7 +6,6 @@
 1. [Setup](#1-setup)
 2. [Running](#2-running)
 3. [Evaluation](#3-evaluation)
-4. [Inferencce](#4-inference)
 
 ## 1. Setup
 Make sure you have:

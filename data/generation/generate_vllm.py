@@ -12,7 +12,26 @@ def main(args):
     n_gpus = torch.cuda.device_count()
     print(f"using {n_gpus} GPUs to generate")
 
-    model = LLM(model=args.base_model, tensor_parallel_size=n_gpus)
+    chosen_dtype = "bfloat16" # Default to bfloat16
+    if torch.cuda.is_available():
+        major_capability, _ = torch.cuda.get_device_capability(0) # For the first GPU
+        if major_capability < 8:
+            print(f"GPU compute capability {major_capability}.x < 8.0. BFloat16 not supported. Using float16 (half).")
+            chosen_dtype = "half"
+        else:
+            print(f"GPU compute capability {major_capability}.x >= 8.0. Using bfloat16.")
+    else:
+        print("CUDA not available. LLM initialization might fail or run on CPU if supported by a different VLLM setup.")
+        # VLLM primarily targets GPUs, so this path is less common for standard VLLM usage.
+        # Defaulting to bfloat16 here, but CPU execution with VLLM is not its primary mode.
+    # ----- END: Added logic for dtype selection -----
+
+    # Original LLM initialization, now using chosen_dtype
+    model = LLM(
+        model=args.base_model,
+        tensor_parallel_size=n_gpus, # Correctly becomes 1 if n_gpus is 1
+        dtype=chosen_dtype
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=False)
 
@@ -38,7 +57,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42, help="seed")
     parser.add_argument("--out_path", default="", type=str, help="output datapath")
     parser.add_argument("--max_sample", type=int, default=None, help="max_sample")
-    parser.add_argument("--temperature", type=int, default=0.7, help="generation temperature")
+    parser.add_argument("--temperature", type=float, default=0.7, help="generation temperature")
     parser.add_argument("--max_new_tokens", type=int, default=1024, help="max new tokens")
 
     args = parser.parse_args()
